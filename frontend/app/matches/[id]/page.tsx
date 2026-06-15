@@ -160,7 +160,7 @@ export default function MatchPage() {
   const top = bestValueEntry
     ? { market: bestValueEntry[0], prob: topProb, label: MKT_LABEL[bestValueEntry[0]] ?? bestValueEntry[0] }
     : bets[0];
-  const topValueBet = bestValueEntry ? bestValueEntry[1] : valueBets[top?.market ?? ""];
+  const topValueBet = (bestValueEntry ? bestValueEntry[1] : valueBets[top?.market ?? ""]) as { odd: number; ev: number; value: boolean } | undefined;
   const rest      = bets.filter(b => b.market !== top?.market).slice(0, 3);
   const topWhy    = top && pred ? buildWhy(top.market, pred, homeName, awayName) : "";
 
@@ -280,7 +280,7 @@ export default function MatchPage() {
               </div>
             ) : (
               <>
-                <p className={`text-xs mb-2 font-medium ${topValueBet?.value ? "text-green-300" : "text-blue-300"}`}>
+                <p className="text-xs mb-2 font-medium text-blue-300">
                   ¿Cuánto paga Betsson por "{top.label}"?
                 </p>
                 <div className="flex gap-2">

@@ -25,3 +25,8 @@ Thumbs.db
 # Archivos internos
 MEMORY.md
 skills-lock.json
+.mcp.json
+.claude/
+.agents/
+database/
+test_prediccion.py
