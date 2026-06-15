@@ -7,23 +7,27 @@ import { saveBet, type Pred } from "@/lib/predictions";
 
 // ── Textos concretos de por qué apostar ─────────────────────
 function buildWhy(market: string, pred: Pred, homeName: string, awayName: string): string {
-  const eloDiff   = Math.abs((pred.home_elo_used ?? 1500) - (pred.away_elo_used ?? 1500));
+  const homeElo   = pred.home_elo_used ?? 1500;
+  const awayElo   = pred.away_elo_used ?? 1500;
+  const eloDiff   = Math.abs(homeElo - awayElo);
   const homeGoals = pred.predicted_home_goals?.toFixed(1);
   const awayGoals = pred.predicted_away_goals?.toFixed(1);
 
   switch (market) {
     case "home":
-      if (eloDiff > 300)
+      if (eloDiff > 300 && homeElo > awayElo)
         return `${homeName} es muy superior: ${eloDiff.toFixed(0)} puntos ELO de diferencia. Suele dominar partidos así y el modelo lo ve como gran favorito.`;
-      if (eloDiff > 150)
+      if (eloDiff > 150 && homeElo > awayElo)
         return `${homeName} tiene clara ventaja en calidad. El modelo lo proyecta como favorito sólido jugando de local.`;
       return `${homeName} tiene una pequeña ventaja como local, aunque el partido puede ir para cualquier lado.`;
 
     case "away":
-      if (eloDiff > 300)
+      if (eloDiff > 300 && awayElo > homeElo)
         return `${awayName} es muy superior incluso jugando de visitante: ${eloDiff.toFixed(0)} puntos ELO de diferencia. Alta probabilidad de victoria.`;
-      if (eloDiff > 150)
+      if (eloDiff > 150 && awayElo > homeElo)
         return `${awayName} tiene clara ventaja en calidad a pesar de ser visitante.`;
+      if (eloDiff > 150 && homeElo > awayElo)
+        return `${awayName} es el visitante pero el modelo lo proyecta con chances — ${homeName} es más fuerte en ELO.`;
       return `${awayName} tiene una leve ventaja, aunque es un partido parejo.`;
 
     case "over25":
@@ -54,12 +58,12 @@ function getTopBets(pred: Pred, homeName: string, awayName: string) {
   const candidates = [
     { market: "home",    prob: pred.home_win_prob },
     { market: "away",    prob: pred.away_win_prob },
+    { market: "draw",    prob: pred.draw_prob },
     { market: "over25",  prob: pred.over25_prob },
     { market: "under25", prob: pred.under25_prob },
     { market: "btts",    prob: pred.btts_prob },
-    { market: "draw",    prob: pred.draw_prob },
   ]
-    .filter((c) => c.prob > 0.45)
+    .filter((c) => c.prob >= 0.20)
     .sort((a, b) => b.prob - a.prob)
     .map((c) => ({ ...c, label: LABEL[c.market] }));
 
@@ -137,11 +141,8 @@ export default function MatchPage() {
 
   const bets      = pred ? getTopBets(pred, homeName, awayName) : [];
 
-  // Si hay value bets de la API, el primero (mayor EV positivo) pasa al frente
+  // Value bets disponibles (prob >= 20% + EV > 0)
   const valueBets: Record<string, { odd: number; ev: number; value: boolean }> = markets?.value_bets ?? {};
-  const bestValueEntry = Object.entries(valueBets)
-    .filter(([, v]) => v.value)
-    .sort((a, b) => b[1].ev - a[1].ev)[0];
 
   const MKT_LABEL: Record<string, string> = {
     home:    `Gana ${homeName}`,
@@ -152,17 +153,15 @@ export default function MatchPage() {
     btts:    "Ambos anotan",
   };
 
-  // top = mejor value bet si existe, si no la mayor probabilidad del modelo
-  // prob viene de markets?.markets (fresco del modelo) o del pred de la DB como fallback
-  const topProb = bestValueEntry
-    ? ((markets?.markets as any)?.[bestValueEntry[0]] ?? bets[0]?.prob ?? 0.5)
-    : bets[0]?.prob ?? 0;
-  const top = bestValueEntry
-    ? { market: bestValueEntry[0], prob: topProb, label: MKT_LABEL[bestValueEntry[0]] ?? bestValueEntry[0] }
-    : bets[0];
-  const topValueBet = (bestValueEntry ? bestValueEntry[1] : valueBets[top?.market ?? ""]) as { odd: number; ev: number; value: boolean } | undefined;
-  const rest      = bets.filter(b => b.market !== top?.market).slice(0, 3);
-  const topWhy    = top && pred ? buildWhy(top.market, pred, homeName, awayName) : "";
+  // top = siempre la apuesta con mayor probabilidad del modelo
+  const top        = bets[0];
+  const topValueBet = top ? valueBets[top.market] : undefined;
+  const hasAnyValue = Object.values(valueBets).some(v => v.value);
+  // Value en mercados distintos al top recomendado
+  const otherValueBets = Object.entries(valueBets)
+    .filter(([k, v]) => v.value && k !== top?.market);
+  const rest       = bets.slice(1, 4);
+  const topWhy     = top && pred ? buildWhy(top.market, pred, homeName, awayName) : "";
 
   function handleQuickOdds(val: string) {
     setQuickOdds(val);
@@ -249,10 +248,15 @@ export default function MatchPage() {
 
       {/* ── Recomendación principal ─────────────────────────── */}
       {pred && top && (
-        <div className={`border rounded-2xl p-6 mb-4 ${topValueBet?.value ? "bg-green-950 border-green-600" : "bg-blue-950 border-blue-700"}`}>
+        <div className={`border rounded-2xl p-6 mb-4 ${topValueBet?.value ? "bg-green-950 border-green-600" : hasAnyValue ? "bg-green-950/30 border-green-900" : "bg-blue-950 border-blue-700"}`}>
           {topValueBet?.value && (
             <div className="bg-green-500 text-black text-xs font-bold px-3 py-1 rounded-lg inline-block mb-3">
               VALUE BET · EV +{(topValueBet.ev * 100).toFixed(1)}%
+            </div>
+          )}
+          {hasAnyValue && !topValueBet?.value && (
+            <div className="bg-gray-700 text-gray-300 text-xs font-bold px-3 py-1 rounded-lg inline-block mb-3">
+              VALUE BET disponible en otro mercado
             </div>
           )}
           <p className={`text-xs font-semibold uppercase tracking-widest mb-3 ${topValueBet?.value ? "text-green-400" : "text-blue-400"}`}>
@@ -349,6 +353,13 @@ export default function MatchPage() {
               </p>
             )}
           </div>
+
+          {/* Nota: hay valor en mercados distintos al top */}
+          {otherValueBets.length > 0 && (
+            <p className="text-xs text-green-600 mt-4">
+              También hay valor en: {otherValueBets.map(([k, v]) => `${MKT_LABEL[k] ?? k} (${v.odd.toFixed(2)})`).join(", ")}
+            </p>
+          )}
         </div>
       )}
 
