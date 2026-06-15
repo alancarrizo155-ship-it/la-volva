@@ -43,11 +43,11 @@ function buildPick(m: MatchData): Pick {
   const away = m.away_team.name;
 
   const candidates = [
-    { label: `Gana ${home}`, key: "home",   prob: markets.home },
-    { label: "Empate",        key: "draw",   prob: markets.draw },
-    { label: `Gana ${away}`, key: "away",   prob: markets.away },
-    ...(markets.over25 >= 0.58 ? [{ label: "Más de 2.5 goles", key: "over25", prob: markets.over25 }] : []),
-    ...(markets.btts   >= 0.58 ? [{ label: "Ambos anotan",     key: "btts",   prob: markets.btts   }] : []),
+    { label: `Gana ${home}`, marketKey: "home",   prob: markets.home },
+    { label: "Empate",        marketKey: "draw",   prob: markets.draw },
+    { label: `Gana ${away}`, marketKey: "away",   prob: markets.away },
+    ...(markets.over25 >= 0.58 ? [{ label: "Más de 2.5 goles", marketKey: "over25", prob: markets.over25 }] : []),
+    ...(markets.btts   >= 0.58 ? [{ label: "Ambos anotan",     marketKey: "btts",   prob: markets.btts   }] : []),
   ].sort((a, b) => b.prob - a.prob);
 
   const top  = candidates[0];
@@ -59,7 +59,7 @@ function buildPick(m: MatchData): Pick {
   else if (top.prob >= 0.40) confidence = "baja";
   else                       confidence = "impredecible";
 
-  const isGoals = top.key === "over25" || top.key === "btts";
+  const isGoals = top.marketKey === "over25" || top.marketKey === "btts";
   const team    = top.label.replace("Gana ", "");
 
   const why: Record<string, string> = {
@@ -74,7 +74,7 @@ function buildPick(m: MatchData): Pick {
 
   return {
     bet:        top.label,
-    marketKey:  top.key,
+    marketKey:  top.marketKey,
     prob:       top.prob,
     fairOdd:    1 / top.prob,
     why:        why[confidence],
