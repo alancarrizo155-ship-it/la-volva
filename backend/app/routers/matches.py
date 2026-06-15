@@ -4,7 +4,11 @@ from fastapi import APIRouter, HTTPException
 from supabase import create_client
 from backend.app.config import settings
 from backend.app.services.poisson_model import calculate_probabilities
-from backend.app.services.odds_fetcher import fetch_wc_odds, extract_best_odds, calculate_ev, blend_with_market, extract_bookmaker_breakdown
+from backend.app.services.odds_fetcher import (
+    fetch_wc_odds, extract_best_odds, calculate_ev, blend_with_market,
+    extract_bookmaker_breakdown, store_match_markets, get_cached_match_markets,
+    build_recommendation,
+)
 
 router   = APIRouter(prefix="/matches", tags=["Partidos"])
 supabase = create_client(settings.supabase_url, settings.supabase_service_role_key)
@@ -180,22 +184,24 @@ def get_upcoming_markets():
                     ev   = float(calculate_ev(prob, float(odd)))
                     value_bets[market_key] = {"odd": float(odd), "ev": ev, "value": bool(ev > 0 and prob >= MIN_VALUE_BET_PROB)}
 
-        results.append({
-            "id":         m["id"],
-            "match_date": m["match_date"],
-            "status":     m["status"],
-            "home_team":  {"name": home["name"], "country_code": home.get("country_code", "")},
-            "away_team":  {"name": away["name"], "country_code": away.get("country_code", "")},
-            "markets": {
-                "home":        probs["home_win_prob"],
-                "draw":        probs["draw_prob"],
-                "away":        probs["away_win_prob"],
-                "over15":      probs["over15_prob"],
-                "over25":      probs["over25_prob"],
-                "under25":     probs["under25_prob"],
-                "btts":        probs["btts_prob"],
-                "btts_over25": probs["btts_over25_prob"],
-            },
+        markets_dict = {
+            "home":        probs["home_win_prob"],
+            "draw":        probs["draw_prob"],
+            "away":        probs["away_win_prob"],
+            "over15":      probs["over15_prob"],
+            "over25":      probs["over25_prob"],
+            "under25":     probs["under25_prob"],
+            "btts":        probs["btts_prob"],
+            "btts_over25": probs["btts_over25_prob"],
+        }
+
+        match_result = {
+            "id":             m["id"],
+            "match_date":     m["match_date"],
+            "status":         m["status"],
+            "home_team":      {"name": home["name"], "country_code": home.get("country_code", "")},
+            "away_team":      {"name": away["name"], "country_code": away.get("country_code", "")},
+            "markets":        markets_dict,
             "predicted_goals": {
                 "home": probs["predicted_home_goals"],
                 "away": probs["predicted_away_goals"],
@@ -204,10 +210,15 @@ def get_upcoming_markets():
                 "home": form_summary(form_home),
                 "away": form_summary(form_away),
             },
-            "value_bets":        value_bets,          # mercados con valor detectado
-            "odds_available":    best_odds is not None,
-            "bookmakers_count":  (best_odds or {}).get("bookmakers_used", 0),
-        })
+            "value_bets":       value_bets,
+            "odds_available":   best_odds is not None,
+            "bookmakers_count": (best_odds or {}).get("bookmakers_used", 0),
+            # Recomendación ya filtrada por EV — fuente de verdad para todos los endpoints
+            "recommendation":   build_recommendation(markets_dict, value_bets),
+        }
+
+        store_match_markets(m["id"], match_result)
+        results.append(match_result)
 
     _cache[cache_key] = {"ts": now_mono, "v": results}
     return results

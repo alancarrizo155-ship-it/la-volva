@@ -201,6 +201,82 @@ def calculate_ev(our_prob: float, bookmaker_odd: float) -> float:
     return round(our_prob * bookmaker_odd - 1, 4)
 
 
+# ── Caché compartida por partido ──────────────────────────────
+# Todos los endpoints consumen esta misma fuente de verdad.
+# Se llena cuando upcoming-markets computa un partido;
+# predictions/{id}/markets la consulta antes de recalcular.
+
+_per_match: dict[int, tuple[float, dict]] = {}
+MATCH_MARKETS_TTL = 120  # segundos — igual al TTL de predicciones
+
+
+def store_match_markets(match_id: int, data: dict) -> None:
+    """Guarda el resultado computado de un partido para que todos los endpoints lo lean igual."""
+    _per_match[match_id] = (time.monotonic(), data)
+
+
+def get_cached_match_markets(match_id: int) -> dict | None:
+    """Devuelve los mercados cacheados si están frescos, o None si hay que recalcular."""
+    entry = _per_match.get(match_id)
+    if entry and time.monotonic() - entry[0] < MATCH_MARKETS_TTL:
+        return entry[1]
+    return None
+
+
+def build_recommendation(markets: dict, value_bets: dict) -> dict | None:
+    """
+    Selecciona la apuesta recomendada aplicando un filtro de protección EV.
+
+    Regla: si prob > 0.70 pero EV < -0.02, ese mercado se descarta aunque sea
+    el de mayor probabilidad. Se intenta el siguiente candidato por probabilidad.
+    Si no hay ninguno válido, devuelve None.
+
+    Devuelve un dict con:
+      market           — clave del mercado elegido
+      prob             — probabilidad del modelo (blended)
+      ev               — EV calculado (o None si no hay cuota)
+      ev_shield_applied — True si se saltó al menos un mercado por EV negativo
+      skipped_by_ev    — lista de mercados descartados con su prob y EV
+    """
+    EV_SHIELD_PROB  = 0.70   # umbral de probabilidad que activa el filtro
+    EV_SHIELD_FLOOR = -0.02  # EV mínimo tolerable cuando prob > EV_SHIELD_PROB
+    MIN_PROB        = 0.20   # nunca recomendar algo con menos de 20%
+
+    candidates = sorted(
+        [
+            ("home",    markets.get("home",    0.0)),
+            ("draw",    markets.get("draw",    0.0)),
+            ("away",    markets.get("away",    0.0)),
+            ("over25",  markets.get("over25",  0.0)),
+            ("under25", markets.get("under25", 0.0)),
+        ],
+        key=lambda x: x[1],
+        reverse=True,
+    )
+
+    skipped: list[dict] = []
+    for mkt_key, prob in candidates:
+        if prob < MIN_PROB:
+            continue
+        vb = value_bets.get(mkt_key)
+        ev = float(vb["ev"]) if vb else None
+
+        # Filtro de protección: alta probabilidad con EV profundamente negativo → saltar
+        if prob > EV_SHIELD_PROB and ev is not None and ev < EV_SHIELD_FLOOR:
+            skipped.append({"market": mkt_key, "prob": round(prob, 4), "ev": round(ev, 4)})
+            continue
+
+        return {
+            "market":            mkt_key,
+            "prob":              round(prob, 4),
+            "ev":                round(ev, 4) if ev is not None else None,
+            "ev_shield_applied": len(skipped) > 0,
+            "skipped_by_ev":     skipped,
+        }
+
+    return None  # ningún mercado pasó los filtros
+
+
 def blend_with_market(model_probs: dict, market_odds: dict, alpha: float = 0.40) -> dict:
     """
     Mezcla probabilidades del modelo con las implícitas del mercado (normalizadas por vig).

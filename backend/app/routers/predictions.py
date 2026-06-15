@@ -5,7 +5,10 @@ from backend.app.models.schemas import BetssonOddsIn, ValueBetOut, ValueBetResul
 from backend.app.services.poisson_model import calculate_probabilities
 from backend.app.services.value_bet import analyze_match
 from backend.app.services.predictor import predict_all_matches
-from backend.app.services.odds_fetcher import fetch_wc_odds, extract_best_odds, calculate_ev, blend_with_market
+from backend.app.services.odds_fetcher import (
+    fetch_wc_odds, extract_best_odds, calculate_ev, blend_with_market,
+    get_cached_match_markets, store_match_markets, build_recommendation,
+)
 
 router   = APIRouter(prefix="/predictions", tags=["Predicciones"])
 supabase = create_client(settings.supabase_url, settings.supabase_service_role_key)
@@ -90,9 +93,21 @@ def calculate_value_bet(match_id: int, odds: BetssonOddsIn) -> ValueBetOut:
 def get_match_markets(match_id: int):
     """
     Devuelve todas las probabilidades calculables para un partido.
-    Usado por la página 'Analizar apuesta de Betsson'.
+
+    Primero consulta la caché compartida que llena upcoming-markets.
+    Si hay un snapshot fresco, lo devuelve sin recalcular — garantizando
+    que la vista de detalle muestre exactamente los mismos números que
+    la pantalla principal.
+
+    Solo recalcula de forma independiente cuando el partido ya terminó
+    (no está en upcoming-markets) o cuando la caché expiró.
     """
-    # Buscar ELO de los equipos del partido
+    # ── 1. Caché compartida con upcoming-markets ──────────────
+    cached = get_cached_match_markets(match_id)
+    if cached:
+        return cached
+
+    # ── 2. Fallback: calcular fresco (partidos terminados / cache miss) ──
     match_result = (
         supabase.table("matches")
         .select("id, home_team_id, away_team_id, status, stage")
@@ -122,13 +137,12 @@ def get_match_markets(match_id: int):
         stage=m.get("stage", "group_stage"),
     )
 
-    # Odds en tiempo real y blend con consenso del mercado
     live_odds = fetch_wc_odds(settings.odds_api_key)
     best_odds = extract_best_odds(live_odds, home_team["name"], away_team["name"])
     if best_odds:
         probs = blend_with_market(probs, best_odds)
 
-    MIN_VALUE_BET_PROB = 0.20  # mínimo 20% de probabilidad para recomendar
+    MIN_VALUE_BET_PROB = 0.20
 
     value_bets = {}
     if best_odds:
@@ -143,30 +157,40 @@ def get_match_markets(match_id: int):
             if odd > 1:
                 prob = float(probs[prob_key])
                 ev   = float(calculate_ev(prob, float(odd)))
-                value_bets[mkt_key] = {"odd": float(odd), "ev": ev, "value": bool(ev > 0 and prob >= MIN_VALUE_BET_PROB)}
+                value_bets[mkt_key] = {
+                    "odd": float(odd), "ev": ev,
+                    "value": bool(ev > 0 and prob >= MIN_VALUE_BET_PROB),
+                }
 
-    return {
-        "match_id":       match_id,
-        "home_team":      home_team["name"],
-        "away_team":      away_team["name"],
-        "status":         m["status"],
-        "markets": {
-            "home":        probs["home_win_prob"],
-            "draw":        probs["draw_prob"],
-            "away":        probs["away_win_prob"],
-            "over15":      probs["over15_prob"],
-            "over25":      probs["over25_prob"],
-            "under25":     probs["under25_prob"],
-            "btts":        probs["btts_prob"],
-            "btts_over25": probs["btts_over25_prob"],
-        },
+    markets_dict = {
+        "home":        probs["home_win_prob"],
+        "draw":        probs["draw_prob"],
+        "away":        probs["away_win_prob"],
+        "over15":      probs["over15_prob"],
+        "over25":      probs["over25_prob"],
+        "under25":     probs["under25_prob"],
+        "btts":        probs["btts_prob"],
+        "btts_over25": probs["btts_over25_prob"],
+    }
+
+    result = {
+        "match_id":        match_id,
+        "home_team":       home_team["name"],
+        "away_team":       away_team["name"],
+        "status":          m["status"],
+        "markets":         markets_dict,
         "predicted_goals": {
             "home": probs["predicted_home_goals"],
             "away": probs["predicted_away_goals"],
         },
-        "value_bets":     value_bets,
-        "odds_available": best_odds is not None,
+        "value_bets":      value_bets,
+        "odds_available":  best_odds is not None,
+        "recommendation":  build_recommendation(markets_dict, value_bets),
     }
+
+    # Guardar en caché para que futuras llamadas (misma sesión) sean consistentes
+    store_match_markets(match_id, result)
+    return result
 
 
 @router.post("/recalculate")
