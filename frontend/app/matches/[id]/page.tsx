@@ -4,6 +4,7 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import { getMatch, getMatchMarkets, getOddsComparison } from "@/lib/api";
 import { saveBet, type Pred } from "@/lib/predictions";
+import { teamName } from "@/lib/teamNames";
 
 // ── Textos concretos de por qué apostar ─────────────────────
 function buildWhy(market: string, pred: Pred, homeName: string, awayName: string): string {
@@ -134,8 +135,8 @@ export default function MatchPage() {
   );
 
   const pred      = match.predictions?.[0] as Pred | undefined;
-  const homeName  = match.home_team?.name  ?? "Local";
-  const awayName  = match.away_team?.name  ?? "Visitante";
+  const homeName  = teamName(match.home_team?.name  ?? "Local");
+  const awayName  = teamName(match.away_team?.name  ?? "Visitante");
   const homeCode  = match.home_team?.country_code ?? "";
   const awayCode  = match.away_team?.country_code ?? "";
 

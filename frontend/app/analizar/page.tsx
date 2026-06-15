@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { getUpcomingMarkets } from "@/lib/api";
+import { teamName } from "@/lib/teamNames";
 
 type Markets = {
   home: number; draw: number; away: number;
@@ -62,9 +63,9 @@ function buildPick(m: MatchData): Pick {
   const away = m.away_team.name;
 
   const candidates = [
-    { label: `Gana ${home}`, marketKey: "home",   prob: markets.home },
-    { label: "Empate",        marketKey: "draw",   prob: markets.draw },
-    { label: `Gana ${away}`, marketKey: "away",   prob: markets.away },
+    { label: `Gana ${teamName(home)}`, marketKey: "home",   prob: markets.home },
+    { label: "Empate",                  marketKey: "draw",   prob: markets.draw },
+    { label: `Gana ${teamName(away)}`, marketKey: "away",   prob: markets.away },
     ...(markets.over25 >= 0.58 ? [{ label: "Más de 2.5 goles", marketKey: "over25", prob: markets.over25 }] : []),
     ...(markets.btts   >= 0.58 ? [{ label: "Ambos anotan",     marketKey: "btts",   prob: markets.btts   }] : []),
   ].sort((a, b) => b.prob - a.prob);
@@ -115,7 +116,7 @@ function buildCombinadas(matches: MatchData[]): Combinada[] {
 
     const vb = m.value_bets?.[pick.marketKey];
     legs.push({
-      matchLabel: `${m.home_team.name} vs ${m.away_team.name}`,
+      matchLabel: `${teamName(m.home_team.name)} vs ${teamName(m.away_team.name)}`,
       matchId:    m.id,
       bet:        pick.bet,
       prob:       pick.prob,
@@ -309,9 +310,9 @@ export default function AnalizarPage() {
   const activeComb = combinadas[tabComb] ?? null;
 
   const MKT_LABELS = (m: MatchData): Record<string, string> => ({
-    home:    `Gana ${m.home_team.name}`,
+    home:    `Gana ${teamName(m.home_team.name)}`,
     draw:    "Empate",
-    away:    `Gana ${m.away_team.name}`,
+    away:    `Gana ${teamName(m.away_team.name)}`,
     over25:  "Más de 2.5 goles",
     under25: "Menos de 2.5 goles",
     btts:    "Ambos anotan",
@@ -517,7 +518,7 @@ export default function AnalizarPage() {
                     <div className="px-4 pt-3 pb-2 flex items-start justify-between">
                       <div>
                         <p className="font-bold text-white text-base">
-                          {m.home_team.name} <span className="text-gray-500 font-normal">vs</span> {m.away_team.name}
+                          {teamName(m.home_team.name)} <span className="text-gray-500 font-normal">vs</span> {teamName(m.away_team.name)}
                         </p>
                         <p className="text-xs text-gray-500 mt-0.5">
                           {matchTime} hs
@@ -535,10 +536,10 @@ export default function AnalizarPage() {
                     {(m.form?.home || m.form?.away) && (
                       <div className="px-4 pb-2 flex flex-wrap gap-3 text-xs text-gray-500">
                         {m.form?.home && (
-                          <span>{m.home_team.name.split(" ")[0]}: <span className="text-white">{m.form.home.scored}G</span> marc · <span className="text-white">{m.form.home.conceded}G</span> rec · {m.form.home.games} PJ</span>
+                          <span>{teamName(m.home_team.name).split(" ")[0]}: <span className="text-white">{m.form.home.scored}G</span> marc · <span className="text-white">{m.form.home.conceded}G</span> rec · {m.form.home.games} PJ</span>
                         )}
                         {m.form?.away && (
-                          <span>{m.away_team.name.split(" ")[0]}: <span className="text-white">{m.form.away.scored}G</span> marc · <span className="text-white">{m.form.away.conceded}G</span> rec · {m.form.away.games} PJ</span>
+                          <span>{teamName(m.away_team.name).split(" ")[0]}: <span className="text-white">{m.form.away.scored}G</span> marc · <span className="text-white">{m.form.away.conceded}G</span> rec · {m.form.away.games} PJ</span>
                         )}
                       </div>
                     )}
