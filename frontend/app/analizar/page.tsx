@@ -37,6 +37,25 @@ type Pick = {
   alternatives: { label: string; prob: number; marketKey: string }[];
 };
 
+type CombinadaLeg = {
+  matchLabel: string;
+  matchId: number;
+  bet: string;
+  prob: number;
+  marketOdd: number | null;
+};
+
+type Combinada = {
+  size: number;
+  legs: CombinadaLeg[];
+  combinedProb: number;
+  fairOdd: number;
+  marketOdd: number | null;
+  ev: number | null;
+};
+
+// ── Lógica de picks ───────────────────────────────────────────
+
 function buildPick(m: MatchData): Pick {
   const { markets } = m;
   const home = m.home_team.name;
@@ -83,6 +102,49 @@ function buildPick(m: MatchData): Pick {
   };
 }
 
+// ── Lógica de combinadas ──────────────────────────────────────
+
+function buildCombinadas(matches: MatchData[]): Combinada[] {
+  const legs: CombinadaLeg[] = [];
+
+  for (const m of matches) {
+    if (!m.markets) continue;
+    const pick = buildPick(m);
+    if (!pick || pick.confidence === "impredecible") continue;
+    if (pick.prob < 0.45) continue; // solo apuestas con chance real
+
+    const vb = m.value_bets?.[pick.marketKey];
+    legs.push({
+      matchLabel: `${m.home_team.name} vs ${m.away_team.name}`,
+      matchId:    m.id,
+      bet:        pick.bet,
+      prob:       pick.prob,
+      marketOdd:  vb?.odd ?? null,
+    });
+  }
+
+  // Ordenar por probabilidad descendente
+  legs.sort((a, b) => b.prob - a.prob);
+
+  const combinadas: Combinada[] = [];
+  for (const size of [2, 3, 4]) {
+    const selected = legs.slice(0, size);
+    if (selected.length < size) break;
+
+    const combinedProb  = selected.reduce((p, l) => p * l.prob, 1);
+    const fairOdd       = 1 / combinedProb;
+    const hasAllOdds    = selected.every(l => l.marketOdd !== null);
+    const marketOdd     = hasAllOdds ? selected.reduce((p, l) => p * l.marketOdd!, 1) : null;
+    const ev            = marketOdd !== null ? combinedProb * marketOdd - 1 : null;
+
+    combinadas.push({ size, legs: selected, combinedProb, fairOdd, marketOdd, ev });
+  }
+
+  return combinadas;
+}
+
+// ── Componentes ───────────────────────────────────────────────
+
 function ConfBadge({ c }: { c: "alta" | "media" | "baja" | "impredecible" }) {
   const map = {
     alta:         "bg-green-800 text-green-200",
@@ -99,6 +161,81 @@ function ConfBadge({ c }: { c: "alta" | "media" | "baja" | "impredecible" }) {
   return <span className={`text-xs px-2 py-0.5 rounded-full ${map[c]}`}>{lbl[c]}</span>;
 }
 
+const SIZE_LABEL: Record<number, string> = { 2: "Doble", 3: "Triple", 4: "Cuádruple" };
+const SIZE_RISK: Record<number, string>  = { 2: "Conservadora", 3: "Moderada", 4: "Arriesgada" };
+const SIZE_COLOR: Record<number, string> = {
+  2: "border-blue-700 bg-blue-950/60",
+  3: "border-yellow-700 bg-yellow-950/40",
+  4: "border-red-800 bg-red-950/40",
+};
+
+function CombinadaCard({ c }: { c: Combinada }) {
+  const pct = Math.round(c.combinedProb * 100);
+  return (
+    <div className={`rounded-2xl border p-4 min-w-[280px] flex-none ${SIZE_COLOR[c.size]}`}>
+      <div className="flex items-center justify-between mb-3">
+        <div>
+          <span className="text-xs font-bold text-white uppercase tracking-wider">{SIZE_LABEL[c.size]}</span>
+          <span className="ml-2 text-xs text-gray-500">{SIZE_RISK[c.size]}</span>
+        </div>
+        {c.ev !== null && c.ev > 0 && (
+          <span className="text-xs bg-green-500 text-black font-bold px-2 py-0.5 rounded-full">
+            +{(c.ev * 100).toFixed(1)}% valor
+          </span>
+        )}
+      </div>
+
+      <div className="space-y-2 mb-4">
+        {c.legs.map((leg, i) => (
+          <div key={i} className="flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <p className="text-xs text-gray-500 truncate">{leg.matchLabel}</p>
+              <p className="text-sm font-semibold text-white">{leg.bet}</p>
+            </div>
+            <div className="text-right flex-none">
+              <p className="text-sm font-bold text-gray-300">{Math.round(leg.prob * 100)}%</p>
+              {leg.marketOdd && (
+                <p className="text-xs text-gray-600">{leg.marketOdd.toFixed(2)}</p>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="border-t border-gray-700 pt-3">
+        <div className="flex justify-between items-end">
+          <div>
+            <p className="text-xs text-gray-500 mb-0.5">Prob. combinada</p>
+            <p className="text-xl font-black text-white">{pct}%</p>
+          </div>
+          <div className="text-right">
+            <p className="text-xs text-gray-500 mb-0.5">
+              {c.marketOdd ? "Cuota del mercado" : "Cuota justa mínima"}
+            </p>
+            <p className={`text-xl font-black ${c.ev !== null && c.ev > 0 ? "text-green-400" : "text-gray-300"}`}>
+              {(c.marketOdd ?? c.fairOdd).toFixed(2)}
+            </p>
+          </div>
+        </div>
+        {c.ev !== null && (
+          <p className={`text-xs mt-2 ${c.ev > 0 ? "text-green-400" : "text-gray-600"}`}>
+            {c.ev > 0
+              ? `El mercado paga más de lo justo — apostá si conseguís esta cuota`
+              : `Cuota justa: ${c.fairOdd.toFixed(2)} — buscá al menos eso en Betsson`}
+          </p>
+        )}
+        {c.marketOdd === null && (
+          <p className="text-xs text-gray-600 mt-2">
+            Multiplicá las cuotas individuales en Betsson para obtener la cuota combinada real
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Utilidades ────────────────────────────────────────────────
+
 const REFRESH_MS = 15 * 60 * 1000;
 
 function countValueBets(ms: MatchData[]) {
@@ -111,11 +248,14 @@ function countValueBets(ms: MatchData[]) {
   return ids;
 }
 
+// ── Página principal ──────────────────────────────────────────
+
 export default function AnalizarPage() {
   const [matches, setMatches]         = useState<MatchData[]>([]);
   const [loading, setLoading]         = useState(true);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [newVBCount, setNewVBCount]   = useState(0);
+  const [tabComb, setTabComb]         = useState(0); // índice de combinada activa
   const prevVBs = useRef<Set<string>>(new Set());
 
   function applyData(raw: MatchData[]) {
@@ -162,8 +302,11 @@ export default function AnalizarPage() {
     if (!byDate[localDate]) byDate[localDate] = [];
     byDate[localDate].push(m);
   }
-  const days   = Object.keys(byDate).sort();
+  const days    = Object.keys(byDate).sort();
   const hasOdds = matches.some(m => m.odds_available);
+
+  const combinadas = buildCombinadas(matches);
+  const activeComb = combinadas[tabComb] ?? null;
 
   const MKT_LABELS = (m: MatchData): Record<string, string> => ({
     home:    `Gana ${m.home_team.name}`,
@@ -177,6 +320,7 @@ export default function AnalizarPage() {
   return (
     <div className="max-w-2xl mx-auto">
 
+      {/* ── Encabezado ── */}
       <div className="mb-5">
         <div className="flex items-start justify-between gap-3">
           <div>
@@ -206,12 +350,120 @@ export default function AnalizarPage() {
         </div>
       </div>
 
+      {/* ── Combinadas recomendadas ── */}
+      {combinadas.length > 0 && (
+        <div className="mb-6">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-sm font-bold text-gray-300 uppercase tracking-widest">Combinadas recomendadas</h2>
+            <p className="text-xs text-gray-600">Selecciones de mayor probabilidad del día</p>
+          </div>
+
+          {/* Tabs */}
+          {combinadas.length > 1 && (
+            <div className="flex gap-2 mb-3">
+              {combinadas.map((c, i) => (
+                <button
+                  key={i}
+                  onClick={() => setTabComb(i)}
+                  className={`text-xs font-semibold px-3 py-1.5 rounded-full transition-colors ${
+                    tabComb === i
+                      ? "bg-white text-black"
+                      : "bg-gray-800 text-gray-400 hover:bg-gray-700"
+                  }`}
+                >
+                  {SIZE_LABEL[c.size]} · {Math.round(c.combinedProb * 100)}%
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Card activa */}
+          {activeComb && (
+            <div className={`rounded-2xl border p-5 ${SIZE_COLOR[activeComb.size]}`}>
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <span className="text-base font-black text-white">{SIZE_LABEL[activeComb.size]}</span>
+                  <span className="ml-2 text-xs text-gray-500">{SIZE_RISK[activeComb.size]}</span>
+                </div>
+                {activeComb.ev !== null && activeComb.ev > 0 && (
+                  <span className="text-xs bg-green-500 text-black font-bold px-2.5 py-1 rounded-full">
+                    VALUE BET · +{(activeComb.ev * 100).toFixed(1)}%
+                  </span>
+                )}
+              </div>
+
+              {/* Legs */}
+              <div className="space-y-3 mb-5">
+                {activeComb.legs.map((leg, i) => (
+                  <Link key={i} href={`/matches/${leg.matchId}`} className="flex items-center justify-between gap-3 group">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs text-gray-500 mb-0.5 group-hover:text-gray-400 transition-colors">{leg.matchLabel}</p>
+                      <p className="text-sm font-bold text-white">{leg.bet}</p>
+                    </div>
+                    <div className="text-right flex-none">
+                      <p className="text-lg font-black text-white">{Math.round(leg.prob * 100)}%</p>
+                      {leg.marketOdd && (
+                        <p className="text-xs text-gray-500">cuota {leg.marketOdd.toFixed(2)}</p>
+                      )}
+                    </div>
+                  </Link>
+                ))}
+              </div>
+
+              {/* Probabilidad bar */}
+              <div className="mb-4">
+                <div className="flex justify-between text-xs text-gray-500 mb-1">
+                  <span>Probabilidad combinada</span>
+                  <span className="font-bold text-white">{Math.round(activeComb.combinedProb * 100)}%</span>
+                </div>
+                <div className="h-1.5 bg-gray-800 rounded-full overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-blue-500"
+                    style={{ width: `${Math.round(activeComb.combinedProb * 100)}%` }}
+                  />
+                </div>
+              </div>
+
+              {/* Cuota y EV */}
+              <div className="border-t border-gray-700 pt-4 flex items-end justify-between">
+                <div>
+                  <p className="text-xs text-gray-500 mb-0.5">
+                    {activeComb.marketOdd ? "Cuota del mercado" : "Cuota justa mínima"}
+                  </p>
+                  <p className={`text-2xl font-black ${activeComb.ev !== null && activeComb.ev > 0 ? "text-green-400" : "text-gray-200"}`}>
+                    {(activeComb.marketOdd ?? activeComb.fairOdd).toFixed(2)}
+                  </p>
+                  {activeComb.ev !== null && (
+                    <p className={`text-xs mt-0.5 ${activeComb.ev > 0 ? "text-green-400" : "text-gray-600"}`}>
+                      {activeComb.ev > 0
+                        ? `El mercado paga más de lo justo`
+                        : `Buscá al menos ${activeComb.fairOdd.toFixed(2)} en Betsson`}
+                    </p>
+                  )}
+                  {activeComb.marketOdd === null && (
+                    <p className="text-xs text-gray-600 mt-0.5">
+                      Multiplicá las cuotas individuales en Betsson
+                    </p>
+                  )}
+                </div>
+                <div className="text-right">
+                  <p className="text-xs text-gray-600">Si apostás $100</p>
+                  <p className="text-lg font-black text-gray-300">
+                    ${Math.round(100 * (activeComb.marketOdd ?? activeComb.fairOdd))}
+                  </p>
+                  <p className="text-xs text-gray-600">ganancia potencial</p>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {!hasOdds && (
         <div className="mb-5 p-3 bg-yellow-950 border border-yellow-800 rounded-xl text-xs text-yellow-300 flex gap-2">
           <span className="flex-none">💡</span>
           <span>
             Sin odds automáticas — el sistema muestra la cuota mínima justa, pero no puede detectar value bets.
-            Agregá tu ODDS_API_KEY en el <code>.env</code> para activar la detección automática.
           </span>
         </div>
       )}
@@ -220,6 +472,7 @@ export default function AnalizarPage() {
         <p className="text-center text-gray-500 py-12">No hay partidos próximos.</p>
       )}
 
+      {/* ── Partidos individuales ── */}
       <div className="space-y-8">
         {days.map(day => (
           <div key={day}>
@@ -235,21 +488,17 @@ export default function AnalizarPage() {
                 const matchTime = new Date(m.match_date).toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" });
                 const labels    = MKT_LABELS(m);
 
-                // Value bets del backend (prob >= 20% + EV > 0)
                 const allValueBets = m.value_bets
                   ? Object.entries(m.value_bets).filter(([, v]) => v.value)
                   : [];
                 const hasValueBet = allValueBets.length > 0;
 
-                // ¿El mercado recomendado tiene valor?
                 const pickHasValue = pick && m.value_bets
                   ? (m.value_bets[pick.marketKey]?.value ?? false)
                   : false;
 
-                // Value bets en mercados distintos al pick
                 const otherValueBets = allValueBets.filter(([k]) => k !== pick?.marketKey);
 
-                // Apariencia de la card
                 const cardBorder = hasValueBet
                   ? "border-green-500 bg-gradient-to-br from-green-950 to-gray-900"
                   : pick?.confidence === "alta"
@@ -258,7 +507,6 @@ export default function AnalizarPage() {
                       ? "border-gray-700 bg-gray-900"
                       : "border-gray-800 bg-gray-900";
 
-                // Datos de cuota para el mercado recomendado
                 const pickVB  = pick && m.value_bets ? m.value_bets[pick.marketKey] : null;
                 const pickOdd = pickVB?.odd ?? 0;
                 const pickEv  = pickVB?.ev  ?? null;
@@ -266,7 +514,6 @@ export default function AnalizarPage() {
                 return (
                   <div key={m.id} className={`rounded-2xl border overflow-hidden ${cardBorder}`}>
 
-                    {/* Cabecera */}
                     <div className="px-4 pt-3 pb-2 flex items-start justify-between">
                       <div>
                         <p className="font-bold text-white text-base">
@@ -285,7 +532,6 @@ export default function AnalizarPage() {
                       }
                     </div>
 
-                    {/* Forma */}
                     {(m.form?.home || m.form?.away) && (
                       <div className="px-4 pb-2 flex flex-wrap gap-3 text-xs text-gray-500">
                         {m.form?.home && (
@@ -297,10 +543,8 @@ export default function AnalizarPage() {
                       </div>
                     )}
 
-                    {/* Contenido principal */}
                     <div className="px-4 pb-4">
                       {!pick || pick.confidence === "impredecible" ? (
-                        /* Estado impredecible */
                         <div className="flex items-center justify-between">
                           <div>
                             <p className="text-sm text-gray-400 font-semibold mb-0.5">Partido sin favorito claro</p>
@@ -309,7 +553,6 @@ export default function AnalizarPage() {
                           <Link href={`/matches/${m.id}`} className="text-xs text-blue-400 hover:underline flex-none ml-3">Ver probabilidades →</Link>
                         </div>
                       ) : (
-                        /* Recomendación por probabilidad */
                         <>
                           <p className="text-xs uppercase tracking-wider mb-1 font-semibold"
                             style={{ color: pickHasValue ? "#86efac" : pick.confidence === "alta" ? "#4ade80" : "#9ca3af" }}>
@@ -320,7 +563,6 @@ export default function AnalizarPage() {
                           </p>
                           <p className="text-sm text-gray-400 mb-3">{pick.why}</p>
 
-                          {/* Barra de probabilidad */}
                           <div className="mb-3">
                             <div className="flex justify-between text-xs text-gray-500 mb-1">
                               <span>Probabilidad según el modelo</span>
@@ -334,7 +576,6 @@ export default function AnalizarPage() {
                             </div>
                           </div>
 
-                          {/* Alternativas ranked */}
                           {pick.alternatives.length > 0 && (
                             <div className="mb-3 flex gap-3">
                               {pick.alternatives.map(alt => (
@@ -345,7 +586,6 @@ export default function AnalizarPage() {
                             </div>
                           )}
 
-                          {/* Cuota y EV */}
                           <div className="flex items-end justify-between border-t border-gray-800 pt-3">
                             <div>
                               {pickOdd > 0 ? (
@@ -367,7 +607,6 @@ export default function AnalizarPage() {
                                 </>
                               )}
 
-                              {/* Nota: hay valor en otro mercado */}
                               {!pickHasValue && otherValueBets.length > 0 && (
                                 <p className="text-xs text-green-600 mt-1">
                                   También hay valor en: {otherValueBets.map(([k, v]) => `${labels[k] ?? k} (${v.odd.toFixed(2)})`).join(", ")}
