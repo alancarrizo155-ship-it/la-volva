@@ -1,0 +1,27 @@
+# Variables de entorno — NUNCA subir a GitHub
+.env
+.env.local
+.env.*
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+
+# Node.js
+node_modules/
+.next/
+out/
+
+# Sistema
+.DS_Store
+Thumbs.db
+*.log
+
+# Archivos internos
+MEMORY.md
+skills-lock.json
