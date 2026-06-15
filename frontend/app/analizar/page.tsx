@@ -465,7 +465,7 @@ export default function AnalizarPage() {
                     <div className="px-4 pb-4">
                       {/* Label */}
                       <p className="text-xs uppercase tracking-wider mb-1 font-semibold text-gray-500">
-                        Apuesta recomendada
+                        {pickEv !== null && pickEv > 0 ? "⚡ Apostá acá" : "Apuesta recomendada"}
                       </p>
 
                       {/* Apuesta */}
@@ -494,6 +494,26 @@ export default function AnalizarPage() {
                           <div className={`h-full rounded-full ${conf.bar}`} style={{ width: `${Math.round(pick.prob * 100)}%` }} />
                         </div>
                       </div>
+
+                      {/* Otras opciones por probabilidad */}
+                      {pick.alternatives.filter(a => a.prob >= 0.20).length > 0 && (
+                        <div className="mb-3">
+                          <p className="text-xs text-gray-600 mb-1">Otras opciones:</p>
+                          {pick.alternatives.filter(a => a.prob >= 0.20).slice(0, 2).map(alt => (
+                            <div key={alt.marketKey} className="flex justify-between text-xs text-gray-500">
+                              <span>{alt.label}</span>
+                              <span>{Math.round(alt.prob * 100)}%</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* También hay valor en otros mercados */}
+                      {otherVB.length > 0 && (
+                        <p className="text-xs text-gray-500 mb-3">
+                          También hay valor en: {otherVB.slice(0, 2).map(([k, v]) => `${labels[k] ?? k} (${v.odd.toFixed(2)})`).join(", ")}
+                        </p>
+                      )}
 
                       {/* Cuota + ganancia (solo si hay odds) */}
                       {pickOdd > 1 && (
@@ -554,31 +574,7 @@ export default function AnalizarPage() {
                               </div>
                             )}
 
-                            {/* Alternativas */}
-                            {pick.alternatives.length > 0 && (
-                              <div>
-                                <p className="text-xs text-gray-600 mb-1">Otras opciones:</p>
-                                {pick.alternatives.map(alt => (
-                                  <div key={alt.marketKey} className="flex justify-between text-xs text-gray-600">
-                                    <span>{alt.label}</span>
-                                    <span>{Math.round(alt.prob * 100)}%</span>
-                                  </div>
-                                ))}
-                              </div>
-                            )}
 
-                            {/* Value bets en otros mercados */}
-                            {otherVB.length > 0 && (
-                              <div>
-                                <p className="text-xs text-gray-600 mb-1">Value bets en otros mercados:</p>
-                                {otherVB.map(([k, v]) => (
-                                  <div key={k} className="flex justify-between text-xs">
-                                    <span className="text-green-600">{labels[k] ?? k}</span>
-                                    <span className="text-green-600">cuota {v.odd.toFixed(2)} · +{(v.ev * 100).toFixed(1)}%</span>
-                                  </div>
-                                ))}
-                              </div>
-                            )}
                           </div>
                         )}
 
