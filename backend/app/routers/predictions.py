@@ -128,6 +128,8 @@ def get_match_markets(match_id: int):
     if best_odds:
         probs = blend_with_market(probs, best_odds)
 
+    MIN_VALUE_BET_PROB = 0.20  # mínimo 20% de probabilidad para recomendar
+
     value_bets = {}
     if best_odds:
         for mkt_key, prob_key in [
@@ -139,8 +141,9 @@ def get_match_markets(match_id: int):
         ]:
             odd = best_odds.get(mkt_key, 0)
             if odd > 1:
-                ev = float(calculate_ev(float(probs[prob_key]), float(odd)))
-                value_bets[mkt_key] = {"odd": float(odd), "ev": ev, "value": bool(ev > 0)}
+                prob = float(probs[prob_key])
+                ev   = float(calculate_ev(prob, float(odd)))
+                value_bets[mkt_key] = {"odd": float(odd), "ev": ev, "value": bool(ev > 0 and prob >= MIN_VALUE_BET_PROB)}
 
     return {
         "match_id":       match_id,

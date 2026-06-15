@@ -163,6 +163,8 @@ def get_upcoming_markets():
         if best_odds:
             probs = blend_with_market(probs, best_odds)
 
+        MIN_VALUE_BET_PROB = 0.20  # mínimo 20% de probabilidad para recomendar
+
         value_bets = {}
         if best_odds:
             for market_key, prob_key in [
@@ -174,8 +176,9 @@ def get_upcoming_markets():
             ]:
                 odd = best_odds.get(market_key, 0)
                 if odd > 1:
-                    ev = float(calculate_ev(float(probs[prob_key]), float(odd)))
-                    value_bets[market_key] = {"odd": float(odd), "ev": ev, "value": bool(ev > 0)}
+                    prob = float(probs[prob_key])
+                    ev   = float(calculate_ev(prob, float(odd)))
+                    value_bets[market_key] = {"odd": float(odd), "ev": ev, "value": bool(ev > 0 and prob >= MIN_VALUE_BET_PROB)}
 
         results.append({
             "id":         m["id"],
