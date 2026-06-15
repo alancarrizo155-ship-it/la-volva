@@ -7,22 +7,20 @@ import { saveBet, type Pred } from "@/lib/predictions";
 import { teamName } from "@/lib/teamNames";
 
 // ── Confidence system ─────────────────────────────────────────
-type Confidence = "muy-alta" | "alta" | "media" | "baja" | "impredecible";
+type Confidence = "muy-alta" | "alta" | "media" | "baja";
 
 const CONF: Record<Confidence, { label: string; color: string; bar: string; badge: string }> = {
-  "muy-alta":     { label: "Muy alta",     color: "text-emerald-400", bar: "bg-emerald-400", badge: "bg-emerald-900 text-emerald-300 border-emerald-700" },
-  "alta":         { label: "Alta",         color: "text-green-400",   bar: "bg-green-400",   badge: "bg-green-900 text-green-300 border-green-700" },
-  "media":        { label: "Media",        color: "text-yellow-400",  bar: "bg-yellow-400",  badge: "bg-yellow-900 text-yellow-300 border-yellow-700" },
-  "baja":         { label: "Baja",         color: "text-orange-400",  bar: "bg-orange-400",  badge: "bg-orange-900 text-orange-300 border-orange-700" },
-  "impredecible": { label: "Impredecible", color: "text-gray-500",    bar: "bg-gray-600",    badge: "bg-gray-800 text-gray-500 border-gray-700" },
+  "muy-alta": { label: "Muy alta", color: "text-emerald-400", bar: "bg-emerald-400", badge: "bg-emerald-900 text-emerald-300 border-emerald-700" },
+  "alta":     { label: "Alta",     color: "text-green-400",   bar: "bg-green-400",   badge: "bg-green-900 text-green-300 border-green-700" },
+  "media":    { label: "Media",    color: "text-yellow-400",  bar: "bg-yellow-400",  badge: "bg-yellow-900 text-yellow-300 border-yellow-700" },
+  "baja":     { label: "Baja",     color: "text-red-400",     bar: "bg-red-500",     badge: "bg-red-900 text-red-300 border-red-700" },
 };
 
 function getConfidence(prob: number): Confidence {
   if (prob >= 0.80) return "muy-alta";
   if (prob >= 0.70) return "alta";
   if (prob >= 0.60) return "media";
-  if (prob >= 0.45) return "baja";
-  return "impredecible";
+  return "baja";
 }
 
 function calcPayout(amount: number, odd: number) {
@@ -173,7 +171,7 @@ export default function MatchPage() {
   const otherValueBets = Object.entries(valueBets).filter(([k, v]) => v.value && k !== top?.market);
   const rest           = bets.slice(1, 4);
   const topWhy         = top && pred ? buildWhy(top.market, pred, homeName, awayName) : "";
-  const conf           = top ? getConfidence(top.prob) : "impredecible";
+  const conf           = top ? getConfidence(top.prob) : "baja" as Confidence;
 
   // Kelly calculado desde cuota automática
   const autoKelly = (() => {
@@ -293,7 +291,17 @@ export default function MatchPage() {
           </div>
 
           {/* Motivo */}
-          <p className="text-gray-300 text-sm leading-relaxed mb-5">{topWhy}</p>
+          <p className="text-gray-300 text-sm leading-relaxed mb-4">{topWhy}</p>
+
+          {/* Advertencia partido parejo */}
+          {conf === "baja" && (
+            <div className="flex items-start gap-2 bg-yellow-950/40 border border-yellow-800/50 rounded-xl px-3 py-2 mb-4">
+              <span className="text-yellow-400 flex-none mt-0.5">⚠️</span>
+              <p className="text-xs text-yellow-300 leading-relaxed">
+                <span className="font-semibold">Partido parejo.</span> El modelo detecta una ligera ventaja para el equipo recomendado, pero no es una apuesta de alta confianza.
+              </p>
+            </div>
+          )}
 
           {/* Cuota y calculadora */}
           <div className="bg-gray-800/60 border border-gray-700 rounded-xl p-4">
@@ -344,15 +352,9 @@ export default function MatchPage() {
                 </div>
               </>
             ) : (
-              <div className="flex justify-between items-start">
-                <div>
-                  <p className="text-xs text-gray-400 mb-0.5">Cuota justa (modelo)</p>
-                  <p className="text-2xl font-black text-gray-200">{(1 / top.prob).toFixed(2)}</p>
-                </div>
-                <p className="text-xs text-gray-500 text-right max-w-[150px] leading-relaxed">
-                  Si Betsson paga más que esto, hay valor matemático en apostar.
-                </p>
-              </div>
+              <p className="text-xs text-gray-500 text-center py-1">
+                No hay cuotas disponibles · ver análisis avanzado para la cuota justa
+              </p>
             )}
           </div>
 
@@ -366,6 +368,19 @@ export default function MatchPage() {
 
           {showAdv && (
             <div className="mt-3 border-t border-gray-800 pt-4 space-y-3">
+
+              {/* Cuota justa (cuando no hay odds automáticas) */}
+              {!topValueBet && (
+                <div className="bg-gray-800/80 rounded-xl p-3">
+                  <p className="text-xs text-gray-400 font-semibold uppercase tracking-wider mb-1.5">Cuota justa (modelo)</p>
+                  <div className="flex items-center justify-between">
+                    <p className="text-2xl font-black text-gray-200">{(1 / top.prob).toFixed(2)}</p>
+                    <p className="text-xs text-gray-500 text-right max-w-[160px] leading-relaxed">
+                      Si Betsson paga más que esto, hay valor matemático en apostar.
+                    </p>
+                  </div>
+                </div>
+              )}
 
               {/* EV */}
               {topValueBet ? (
