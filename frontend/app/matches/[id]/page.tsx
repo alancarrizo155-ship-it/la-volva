@@ -6,7 +6,32 @@ import { getMatch, getMatchMarkets, getOddsComparison } from "@/lib/api";
 import { saveBet, type Pred } from "@/lib/predictions";
 import { teamName } from "@/lib/teamNames";
 
-// ── Textos concretos de por qué apostar ─────────────────────
+// ── Confidence system ─────────────────────────────────────────
+type Confidence = "muy-alta" | "alta" | "media" | "baja" | "impredecible";
+
+const CONF: Record<Confidence, { label: string; color: string; bar: string; badge: string }> = {
+  "muy-alta":     { label: "Muy alta",     color: "text-emerald-400", bar: "bg-emerald-400", badge: "bg-emerald-900 text-emerald-300 border-emerald-700" },
+  "alta":         { label: "Alta",         color: "text-green-400",   bar: "bg-green-400",   badge: "bg-green-900 text-green-300 border-green-700" },
+  "media":        { label: "Media",        color: "text-yellow-400",  bar: "bg-yellow-400",  badge: "bg-yellow-900 text-yellow-300 border-yellow-700" },
+  "baja":         { label: "Baja",         color: "text-orange-400",  bar: "bg-orange-400",  badge: "bg-orange-900 text-orange-300 border-orange-700" },
+  "impredecible": { label: "Impredecible", color: "text-gray-500",    bar: "bg-gray-600",    badge: "bg-gray-800 text-gray-500 border-gray-700" },
+};
+
+function getConfidence(prob: number): Confidence {
+  if (prob >= 0.80) return "muy-alta";
+  if (prob >= 0.70) return "alta";
+  if (prob >= 0.60) return "media";
+  if (prob >= 0.45) return "baja";
+  return "impredecible";
+}
+
+function calcPayout(amount: number, odd: number) {
+  const cobras   = +(amount * odd).toFixed(0);
+  const ganancia = cobras - amount;
+  return { cobras, ganancia };
+}
+
+// ── Textos de por qué apostar ─────────────────────────────────
 function buildWhy(market: string, pred: Pred, homeName: string, awayName: string): string {
   const homeElo   = pred.home_elo_used ?? 1500;
   const awayElo   = pred.away_elo_used ?? 1500;
@@ -40,6 +65,9 @@ function buildWhy(market: string, pred: Pred, homeName: string, awayName: string
     case "btts":
       return `Ambos equipos tienen ataque efectivo. Alta probabilidad de que los dos conviertan al menos un gol cada uno.`;
 
+    case "draw":
+      return `El modelo no ve un favorito claro. Empate es una posibilidad real en este partido.`;
+
     default:
       return "Esto es lo más probable según el modelo estadístico.";
   }
@@ -56,7 +84,7 @@ function getTopBets(pred: Pred, homeName: string, awayName: string) {
     btts:    "Ambos anotan",
   };
 
-  const candidates = [
+  return [
     { market: "home",    prob: pred.home_win_prob },
     { market: "away",    prob: pred.away_win_prob },
     { market: "draw",    prob: pred.draw_prob },
@@ -67,34 +95,23 @@ function getTopBets(pred: Pred, homeName: string, awayName: string) {
     .filter((c) => c.prob >= 0.20)
     .sort((a, b) => b.prob - a.prob)
     .map((c) => ({ ...c, label: LABEL[c.market] }));
-
-  return candidates;
 }
 
-// ── Calcular EV ───────────────────────────────────────────────
 function calcEV(prob: number, odds: number) {
   return (prob * odds) - 1;
-}
-
-function EVMessage({ ev }: { ev: number }) {
-  if (ev > 0.05)
-    return <p className="text-green-400 font-bold text-sm">¡Hay valor! Betsson está pagando más de lo que debería. EV: +{(ev * 100).toFixed(1)}%</p>;
-  if (ev > -0.05)
-    return <p className="text-yellow-400 text-sm">Odd justa — sin ventaja clara. EV: {(ev * 100).toFixed(1)}%</p>;
-  return <p className="text-red-400 text-sm">Betsson tiene ventaja en este mercado. EV: {(ev * 100).toFixed(1)}%</p>;
 }
 
 // ── Página principal ──────────────────────────────────────────
 export default function MatchPage() {
   const { id } = useParams();
-  const [match, setMatch]           = useState<any>(null);
-  const [markets, setMarkets]       = useState<any>(null);
-  const [loading, setLoading]       = useState(true);
-  const [showStats, setShowStats]   = useState(false);
-  const [oddsComp, setOddsComp]     = useState<any>(null);
-  const [showOddsComp, setShowOddsComp] = useState(false);
+  const [match, setMatch]         = useState<any>(null);
+  const [markets, setMarkets]     = useState<any>(null);
+  const [loading, setLoading]     = useState(true);
+  const [showStats, setShowStats] = useState(false);
+  const [oddsComp, setOddsComp]   = useState<any>(null);
+  const [showAdv, setShowAdv]     = useState(false);
 
-  // Odds rápidas para la apuesta principal
+  const [monto, setMonto]         = useState("");
   const [quickOdds, setQuickOdds] = useState("");
   const [ev, setEv]               = useState<number | null>(null);
   const [kelly, setKelly]         = useState<number | null>(null);
@@ -103,9 +120,8 @@ export default function MatchPage() {
     return "";
   });
 
-  // Registrar apuesta
-  const [betForm, setBetForm]   = useState({ show: false, selection: "", amount: "", odds: "" });
-  const [betSaved, setBetSaved] = useState(false);
+  const [betForm, setBetForm]     = useState({ show: false, selection: "", amount: "", odds: "" });
+  const [betSaved, setBetSaved]   = useState(false);
 
   function load() {
     setLoading(true);
@@ -114,7 +130,6 @@ export default function MatchPage() {
       setMatch(matchData);
       setMarkets(mktData);
       setLoading(false);
-      // Pre-cargar comparación para el mejor value bet
       const vb = mktData?.value_bets;
       if (vb) {
         const best = Object.entries(vb as Record<string, any>)
@@ -127,22 +142,21 @@ export default function MatchPage() {
   useEffect(load, [id]);
 
   if (loading) return <div className="text-center text-gray-400 py-20">Analizando partido...</div>;
-  if (!match)  return (
+  if (!match) return (
     <div className="text-center py-20">
       <p className="text-gray-400 mb-3">No se pudo conectar con el servidor.</p>
       <button onClick={load} className="text-blue-400 hover:underline text-sm">Reintentar</button>
     </div>
   );
 
-  const pred      = match.predictions?.[0] as Pred | undefined;
-  const homeName  = teamName(match.home_team?.name  ?? "Local");
-  const awayName  = teamName(match.away_team?.name  ?? "Visitante");
-  const homeCode  = match.home_team?.country_code ?? "";
-  const awayCode  = match.away_team?.country_code ?? "";
+  const pred     = match.predictions?.[0] as Pred | undefined;
+  const homeName = teamName(match.home_team?.name ?? "Local");
+  const awayName = teamName(match.away_team?.name ?? "Visitante");
+  const homeCode = match.home_team?.country_code ?? "";
+  const awayCode = match.away_team?.country_code ?? "";
 
-  const bets      = pred ? getTopBets(pred, homeName, awayName) : [];
+  const bets     = pred ? getTopBets(pred, homeName, awayName) : [];
 
-  // Value bets disponibles (prob >= 20% + EV > 0)
   const valueBets: Record<string, { odd: number; ev: number; value: boolean }> = markets?.value_bets ?? {};
 
   const MKT_LABEL: Record<string, string> = {
@@ -154,26 +168,31 @@ export default function MatchPage() {
     btts:    "Ambos anotan",
   };
 
-  // top = siempre la apuesta con mayor probabilidad del modelo
-  const top        = bets[0];
-  const topValueBet = top ? valueBets[top.market] : undefined;
-  const hasAnyValue = Object.values(valueBets).some(v => v.value);
-  // Value en mercados distintos al top recomendado
-  const otherValueBets = Object.entries(valueBets)
-    .filter(([k, v]) => v.value && k !== top?.market);
-  const rest       = bets.slice(1, 4);
-  const topWhy     = top && pred ? buildWhy(top.market, pred, homeName, awayName) : "";
+  const top            = bets[0];
+  const topValueBet    = top ? valueBets[top.market] : undefined;
+  const otherValueBets = Object.entries(valueBets).filter(([k, v]) => v.value && k !== top?.market);
+  const rest           = bets.slice(1, 4);
+  const topWhy         = top && pred ? buildWhy(top.market, pred, homeName, awayName) : "";
+  const conf           = top ? getConfidence(top.prob) : "impredecible";
+
+  // Kelly calculado desde cuota automática
+  const autoKelly = (() => {
+    if (!top || !topValueBet) return null;
+    const b = topValueBet.odd - 1;
+    const q = 1 - top.prob;
+    return Math.max(0, (top.prob * b - q) / b);
+  })();
+
+  const displayKelly = topValueBet ? autoKelly : kelly;
 
   function handleQuickOdds(val: string) {
     setQuickOdds(val);
     const o = parseFloat(val);
     if (top && o > 1) {
       setEv(calcEV(top.prob, o));
-      // Kelly: f = (p*b - q) / b  donde b = odds - 1
       const b = o - 1;
       const q = 1 - top.prob;
-      const k = (top.prob * b - q) / b;
-      setKelly(Math.max(0, k));
+      setKelly(Math.max(0, (top.prob * b - q) / b));
     } else {
       setEv(null);
       setKelly(null);
@@ -207,7 +226,6 @@ export default function MatchPage() {
     setTimeout(() => setBetSaved(false), 3000);
   }
 
-  // Inicializar selección del bet form con la mejor apuesta
   const betSelection = betForm.selection || top?.market || "home";
 
   return (
@@ -249,167 +267,207 @@ export default function MatchPage() {
 
       {/* ── Recomendación principal ─────────────────────────── */}
       {pred && top && (
-        <div className={`border rounded-2xl p-6 mb-4 ${topValueBet?.value ? "bg-green-950 border-green-600" : hasAnyValue ? "bg-green-950/30 border-green-900" : "bg-blue-950 border-blue-700"}`}>
-          {topValueBet?.value && (
-            <div className="bg-green-500 text-black text-xs font-bold px-3 py-1 rounded-lg inline-block mb-3">
-              VALUE BET · EV +{(topValueBet.ev * 100).toFixed(1)}%
-            </div>
-          )}
-          {hasAnyValue && !topValueBet?.value && (
-            <div className="bg-gray-700 text-gray-300 text-xs font-bold px-3 py-1 rounded-lg inline-block mb-3">
-              VALUE BET disponible en otro mercado
-            </div>
-          )}
-          <p className={`text-xs font-semibold uppercase tracking-widest mb-3 ${topValueBet?.value ? "text-green-400" : "text-blue-400"}`}>
-            🎯 En este partido apostale a
-          </p>
-
-          <p className="text-3xl font-black text-white mb-1 leading-tight">{top.label}</p>
-
-          <div className="flex items-end gap-3 mb-4">
-            <p className={`text-5xl font-black ${topValueBet?.value ? "text-green-300" : "text-blue-300"}`}>{(top.prob * 100).toFixed(0)}%</p>
-            <p className={`text-sm mb-2 ${topValueBet?.value ? "text-green-400" : "text-blue-400"}`}>de probabilidad</p>
+        <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 mb-4">
+          {/* Header */}
+          <div className="flex items-start justify-between mb-4">
+            <p className="text-xs text-gray-400 uppercase tracking-widest font-semibold">Apuesta recomendada</p>
+            <span className={`text-xs font-bold px-2.5 py-1 rounded-full border ${CONF[conf].badge}`}>
+              Confianza {CONF[conf].label}
+            </span>
           </div>
 
+          {/* Nombre de la apuesta */}
+          <p className={`text-3xl font-black mb-3 leading-tight ${CONF[conf].color}`}>{top.label}</p>
+
+          {/* Barra de probabilidad */}
+          <div className="flex items-center gap-3 mb-4">
+            <div className="flex-1 bg-gray-800 rounded-full h-2.5">
+              <div
+                className={`${CONF[conf].bar} h-2.5 rounded-full transition-all`}
+                style={{ width: `${top.prob * 100}%` }}
+              />
+            </div>
+            <span className={`text-2xl font-black min-w-[4rem] text-right ${CONF[conf].color}`}>
+              {(top.prob * 100).toFixed(0)}%
+            </span>
+          </div>
+
+          {/* Motivo */}
           <p className="text-gray-300 text-sm leading-relaxed mb-5">{topWhy}</p>
 
-          {/* Odds automáticas o input manual */}
-          <div className={`border rounded-xl p-4 ${topValueBet?.value ? "bg-green-900/30 border-green-800" : "bg-blue-900/40 border-blue-800"}`}>
+          {/* Cuota y calculadora */}
+          <div className="bg-gray-800/60 border border-gray-700 rounded-xl p-4">
             {topValueBet ? (
-              <div>
-                <p className="text-xs text-gray-400 mb-1">Cuota del mercado</p>
-                <p className={`text-2xl font-black mb-1 ${topValueBet.value ? "text-green-400" : "text-gray-300"}`}>
-                  {topValueBet.odd.toFixed(2)}
-                </p>
-                <EVMessage ev={topValueBet.ev} />
-              </div>
-            ) : (
               <>
-                <p className="text-xs mb-2 font-medium text-blue-300">
-                  ¿Cuánto paga Betsson por "{top.label}"?
-                </p>
-                <div className="flex gap-2">
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="1.01"
-                    placeholder="ej: 1.80"
-                    value={quickOdds}
-                    onChange={(e) => handleQuickOdds(e.target.value)}
-                    className="flex-1 bg-blue-900/60 border border-blue-700 rounded-lg px-3 py-2 text-white placeholder-blue-700 focus:border-blue-400 focus:outline-none text-sm"
-                  />
-                </div>
-              </>
-            )}
-            {ev !== null && (
-              <div className="mt-3 space-y-3">
-                <EVMessage ev={ev} />
-
-                {/* Kelly Criterion */}
-                {kelly !== null && kelly > 0 && (
-                  <div className="bg-blue-900/30 border border-blue-800 rounded-xl p-3">
-                    <p className="text-xs text-blue-300 font-semibold mb-2">📐 Calculadora Kelly</p>
-                    <p className="text-xs text-gray-400 mb-2">
-                      El Kelly Criterion te dice cuánto de tu bankroll apostar para maximizar ganancias a largo plazo.
-                    </p>
-                    <div className="flex gap-2 items-center mb-2">
-                      <input
-                        type="number"
-                        min="0"
-                        placeholder="Tu bankroll total ($)"
-                        value={bankroll}
-                        onChange={(e) => handleBankroll(e.target.value)}
-                        className="flex-1 bg-blue-900/60 border border-blue-700 rounded-lg px-3 py-1.5 text-white placeholder-blue-700 focus:border-blue-400 focus:outline-none text-sm"
-                      />
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="text-white font-bold">
-                          Apostar {(kelly * 100).toFixed(1)}% del bankroll
-                        </p>
-                        {bankroll && parseFloat(bankroll) > 0 && (
-                          <p className="text-green-400 text-sm font-bold">
-                            = ${(parseFloat(bankroll) * kelly).toFixed(2)}
-                          </p>
-                        )}
-                      </div>
-                      <p className="text-xs text-gray-500 max-w-[140px] text-right">
-                        {kelly > 0.25
-                          ? "Señal muy fuerte — el Kelly sugiere una apuesta grande"
-                          : kelly > 0.10
-                          ? "Apuesta moderada"
-                          : "Apuesta conservadora"}
+                <div className="flex justify-between items-start mb-4">
+                  <div>
+                    <p className="text-xs text-gray-400 mb-0.5">Cuota del mercado</p>
+                    <div className="flex items-center gap-2">
+                      <p className={`text-3xl font-black ${topValueBet.value ? "text-green-400" : "text-white"}`}>
+                        {topValueBet.odd.toFixed(2)}
                       </p>
+                      {topValueBet.value && (
+                        <span className="text-xs bg-green-600 text-white px-2 py-0.5 rounded font-bold">VALUE BET</span>
+                      )}
                     </div>
                   </div>
-                )}
-                {kelly !== null && kelly <= 0 && (
-                  <p className="text-xs text-red-400">Kelly dice: no apostar — sin ventaja matemática.</p>
-                )}
+                  <div className="text-right">
+                    <p className="text-xs text-gray-400 mb-0.5">Cuota justa</p>
+                    <p className="text-xl font-bold text-gray-400">{(1 / top.prob).toFixed(2)}</p>
+                  </div>
+                </div>
+                <p className="text-xs text-gray-400 mb-2">Calculá tu ganancia</p>
+                <div className="flex gap-3 items-center">
+                  <div className="flex-1">
+                    <input
+                      type="number" min="0" placeholder="Apostá ($)"
+                      value={monto}
+                      onChange={(e) => setMonto(e.target.value)}
+                      className="w-full bg-gray-900 border border-gray-600 rounded-lg px-3 py-2 text-white placeholder-gray-600 focus:border-blue-400 focus:outline-none text-sm"
+                    />
+                  </div>
+                  {monto && parseFloat(monto) > 0 && (() => {
+                    const { cobras, ganancia } = calcPayout(parseFloat(monto), topValueBet.odd);
+                    return (
+                      <div className="flex gap-3">
+                        <div className="text-center">
+                          <p className="text-xs text-gray-500">Cobrás</p>
+                          <p className="text-lg font-black text-white">${cobras}</p>
+                        </div>
+                        <div className="text-center">
+                          <p className="text-xs text-gray-500">Ganás</p>
+                          <p className={`text-lg font-black ${ganancia >= 0 ? "text-green-400" : "text-red-400"}`}>${ganancia}</p>
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </div>
+              </>
+            ) : (
+              <div className="flex justify-between items-start">
+                <div>
+                  <p className="text-xs text-gray-400 mb-0.5">Cuota justa (modelo)</p>
+                  <p className="text-2xl font-black text-gray-200">{(1 / top.prob).toFixed(2)}</p>
+                </div>
+                <p className="text-xs text-gray-500 text-right max-w-[150px] leading-relaxed">
+                  Si Betsson paga más que esto, hay valor matemático en apostar.
+                </p>
               </div>
-            )}
-            {ev === null && (
-              <p className="text-xs text-blue-600 mt-2">
-                Ingresá la cuota de Betsson para saber si vale la pena apostar
-              </p>
             )}
           </div>
 
-          {/* Nota: hay valor en mercados distintos al top */}
-          {otherValueBets.length > 0 && (
-            <p className="text-xs text-green-600 mt-4">
-              También hay valor en: {otherValueBets.map(([k, v]) => `${MKT_LABEL[k] ?? k} (${v.odd.toFixed(2)})`).join(", ")}
-            </p>
-          )}
-        </div>
-      )}
-
-      {/* ── Comparador de cuotas ────────────────────────────── */}
-      {oddsComp && oddsComp.bookmakers?.length > 0 && (
-        <div className="bg-gray-900 border border-gray-800 rounded-2xl mb-4 overflow-hidden">
+          {/* Análisis avanzado */}
           <button
-            onClick={() => setShowOddsComp(v => !v)}
-            className="w-full flex items-center justify-between px-5 py-3.5 hover:bg-gray-800/50 transition-colors"
+            onClick={() => setShowAdv((v) => !v)}
+            className="w-full text-xs text-gray-500 hover:text-gray-300 mt-4 py-2 transition-colors flex items-center justify-center gap-1.5"
           >
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-semibold text-white">
-                🏦 Comparar cuotas — {MKT_LABEL[oddsComp.market] ?? oddsComp.market}
-              </span>
-              <span className="text-xs text-gray-500">{oddsComp.bookmakers.length} casas</span>
-            </div>
-            <span className="text-gray-500 text-xs">{showOddsComp ? "▲" : "▼"}</span>
+            {showAdv ? "▲ Ocultar análisis avanzado" : "▼ Ver análisis avanzado"}
           </button>
 
-          {showOddsComp && (
-            <div className="px-4 pb-4">
-              <div className="space-y-1.5">
-                {oddsComp.bookmakers.map((bm: any) => (
-                  <div
-                    key={bm.key}
-                    className={`flex items-center justify-between rounded-xl px-4 py-2.5 ${
-                      bm.is_best ? "bg-green-900/40 border border-green-700" : "bg-gray-800/60"
-                    }`}
-                  >
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm text-white font-medium">{bm.name}</span>
-                      {bm.is_betsson && (
-                        <span className="text-xs bg-blue-700 text-white px-1.5 py-0.5 rounded">Betsson</span>
-                      )}
+          {showAdv && (
+            <div className="mt-3 border-t border-gray-800 pt-4 space-y-3">
+
+              {/* EV */}
+              {topValueBet ? (
+                <div className="bg-gray-800/80 rounded-xl p-3">
+                  <p className="text-xs text-gray-400 font-semibold uppercase tracking-wider mb-1.5">Valor esperado (EV)</p>
+                  {topValueBet.value ? (
+                    <p className="text-green-400 text-sm font-bold">¡Hay valor! Betsson paga más de lo que debería. EV: +{(topValueBet.ev * 100).toFixed(1)}%</p>
+                  ) : topValueBet.ev > -0.05 ? (
+                    <p className="text-yellow-400 text-sm">Odd justa — sin ventaja clara. EV: {(topValueBet.ev * 100).toFixed(1)}%</p>
+                  ) : (
+                    <p className="text-red-400 text-sm">Betsson tiene ventaja en este mercado. EV: {(topValueBet.ev * 100).toFixed(1)}%</p>
+                  )}
+                </div>
+              ) : (
+                <div className="bg-gray-800/80 rounded-xl p-3">
+                  <p className="text-xs text-gray-400 font-semibold uppercase tracking-wider mb-1.5">Calcular valor con cuota de Betsson</p>
+                  <input
+                    type="number" step="0.01" min="1.01" placeholder="Ingresá la cuota de Betsson (ej: 1.80)"
+                    value={quickOdds}
+                    onChange={(e) => handleQuickOdds(e.target.value)}
+                    className="w-full bg-gray-900 border border-gray-600 rounded-lg px-3 py-2 text-white placeholder-gray-600 focus:border-blue-400 focus:outline-none text-sm"
+                  />
+                  {ev !== null && (
+                    <div className="mt-2">
+                      {ev > 0.05
+                        ? <p className="text-green-400 text-sm font-bold">¡Hay valor! EV: +{(ev * 100).toFixed(1)}%</p>
+                        : ev > -0.05
+                        ? <p className="text-yellow-400 text-sm">Odd justa. EV: {(ev * 100).toFixed(1)}%</p>
+                        : <p className="text-red-400 text-sm">Betsson tiene ventaja. EV: {(ev * 100).toFixed(1)}%</p>
+                      }
                     </div>
-                    <div className="flex items-center gap-2">
-                      {bm.is_best && (
-                        <span className="text-xs bg-green-600 text-white px-1.5 py-0.5 rounded font-bold">Mejor cuota</span>
+                  )}
+                </div>
+              )}
+
+              {/* Kelly */}
+              {displayKelly !== null && (
+                <div className="bg-gray-800/80 rounded-xl p-3">
+                  <p className="text-xs text-gray-400 font-semibold uppercase tracking-wider mb-1">Kelly Criterion</p>
+                  <p className="text-xs text-gray-500 mb-2">Cuánto del bankroll apostar para maximizar a largo plazo.</p>
+                  {displayKelly > 0 ? (
+                    <>
+                      <div className="mb-2">
+                        <input
+                          type="number" min="0" placeholder="Tu bankroll total ($)"
+                          value={bankroll}
+                          onChange={(e) => handleBankroll(e.target.value)}
+                          className="w-full bg-gray-900 border border-gray-600 rounded-lg px-3 py-1.5 text-white placeholder-gray-600 focus:border-blue-400 focus:outline-none text-sm"
+                        />
+                      </div>
+                      <p className="text-white font-bold">Apostar {(displayKelly * 100).toFixed(1)}% del bankroll</p>
+                      {bankroll && parseFloat(bankroll) > 0 && (
+                        <p className="text-green-400 text-sm font-bold">= ${(parseFloat(bankroll) * displayKelly).toFixed(2)}</p>
                       )}
-                      <span className={`text-lg font-black ${bm.is_best ? "text-green-300" : "text-gray-200"}`}>
-                        {bm.odd.toFixed(2)}
-                      </span>
-                    </div>
+                    </>
+                  ) : (
+                    <p className="text-red-400 text-sm">Kelly dice: no apostar — sin ventaja matemática.</p>
+                  )}
+                </div>
+              )}
+
+              {/* Value bets en otros mercados */}
+              {otherValueBets.length > 0 && (
+                <div className="bg-gray-800/80 rounded-xl p-3">
+                  <p className="text-xs text-gray-400 font-semibold uppercase tracking-wider mb-2">Value bets en otros mercados</p>
+                  <div className="space-y-1.5">
+                    {otherValueBets.map(([k, v]) => (
+                      <div key={k} className="flex justify-between items-center">
+                        <span className="text-sm text-white">{MKT_LABEL[k] ?? k}</span>
+                        <span className="text-green-400 text-sm font-bold">EV +{(v.ev * 100).toFixed(1)}% · {v.odd.toFixed(2)}</span>
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
-              <p className="text-xs text-gray-600 mt-3 text-center">
-                Cuotas actualizadas cada hora · Odds API
-              </p>
+                </div>
+              )}
+
+              {/* Comparar cuotas */}
+              {oddsComp && oddsComp.bookmakers?.length > 0 && (
+                <div className="bg-gray-800/80 rounded-xl p-3">
+                  <p className="text-xs text-gray-400 font-semibold uppercase tracking-wider mb-2">
+                    Comparar cuotas — {MKT_LABEL[oddsComp.market] ?? oddsComp.market}
+                  </p>
+                  <div className="space-y-1.5">
+                    {oddsComp.bookmakers.map((bm: any) => (
+                      <div
+                        key={bm.key}
+                        className={`flex items-center justify-between rounded-lg px-3 py-2 ${bm.is_best ? "bg-green-900/40 border border-green-700" : "bg-gray-700/60"}`}
+                      >
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-sm text-white">{bm.name}</span>
+                          {bm.is_betsson && <span className="text-xs bg-blue-700 text-white px-1.5 py-0.5 rounded">Betsson</span>}
+                          {bm.is_best && <span className="text-xs bg-green-600 text-white px-1.5 py-0.5 rounded font-bold">Mejor</span>}
+                        </div>
+                        <span className={`text-sm font-black ${bm.is_best ? "text-green-300" : "text-gray-200"}`}>
+                          {bm.odd.toFixed(2)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="text-xs text-gray-600 mt-2 text-center">Cuotas actualizadas cada hora · Odds API</p>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -418,17 +476,17 @@ export default function MatchPage() {
       {/* ── Otras opciones ──────────────────────────────────── */}
       {pred && rest.length > 0 && (
         <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 mb-4">
-          <p className="text-xs text-gray-400 font-semibold uppercase tracking-wider mb-3">
-            Otras opciones
-          </p>
+          <p className="text-xs text-gray-400 font-semibold uppercase tracking-wider mb-3">Otras opciones</p>
           <div className="space-y-2">
             {rest.map((b) => (
-              <div key={b.market} className="flex items-center justify-between py-2 border-b border-gray-800 last:border-0">
-                <div>
-                  <p className="font-medium text-white text-sm">{b.label}</p>
-                  <p className="text-xs text-gray-500 mt-0.5">{buildWhy(b.market, pred, homeName, awayName).split(". ")[0]}.</p>
+              <div key={b.market} className="flex items-center gap-3 py-2 border-b border-gray-800 last:border-0">
+                <p className="font-medium text-white text-sm flex-1">{b.label}</p>
+                <div className="w-20 bg-gray-800 rounded-full h-1.5 flex-none">
+                  <div className="bg-gray-600 h-1.5 rounded-full" style={{ width: `${b.prob * 100}%` }} />
                 </div>
-                <p className="text-xl font-black text-gray-300 ml-4 flex-none">{(b.prob * 100).toFixed(0)}%</p>
+                <p className="text-base font-black text-gray-300 w-10 text-right flex-none">
+                  {(b.prob * 100).toFixed(0)}%
+                </p>
               </div>
             ))}
           </div>
@@ -437,7 +495,7 @@ export default function MatchPage() {
 
       {/* ── Acierto del modelo (partidos terminados) ────────── */}
       {pred && match.status === "finished" && match.home_goals != null && (() => {
-        const maxProb  = Math.max(pred.home_win_prob, pred.draw_prob, pred.away_win_prob);
+        const maxProb   = Math.max(pred.home_win_prob, pred.draw_prob, pred.away_win_prob);
         const predicted = pred.home_win_prob === maxProb ? "home" : pred.away_win_prob === maxProb ? "away" : "draw";
         const actual    = match.home_goals > match.away_goals ? "home" : match.away_goals > match.home_goals ? "away" : "draw";
         const correct   = predicted === actual;
@@ -545,7 +603,6 @@ export default function MatchPage() {
         <div className="bg-gray-900 border border-gray-800 rounded-2xl p-5 mb-4 text-sm">
           <h3 className="font-semibold text-gray-300 mb-4">Estadísticas del modelo</h3>
 
-          {/* Barra de probabilidades */}
           <div className="mb-4">
             <div className="flex h-3 rounded-full overflow-hidden gap-0.5 mb-1">
               <div className="bg-blue-500" style={{ width: `${pred.home_win_prob * 100}%` }} />
@@ -562,11 +619,11 @@ export default function MatchPage() {
           <div className="grid grid-cols-3 gap-2 text-center">
             {[
               { label: "Goles esperados", value: `${pred.predicted_home_goals} — ${pred.predicted_away_goals}` },
-              { label: "Over 2.5", value: `${(pred.over25_prob * 100).toFixed(1)}%` },
-              { label: "Ambos anotan", value: `${(pred.btts_prob * 100).toFixed(1)}%` },
-              { label: "Under 2.5", value: `${(pred.under25_prob * 100).toFixed(1)}%` },
-              { label: "ELO Local", value: pred.home_elo_used?.toFixed(0) ?? "—" },
-              { label: "ELO Visitante", value: pred.away_elo_used?.toFixed(0) ?? "—" },
+              { label: "Over 2.5",        value: `${(pred.over25_prob * 100).toFixed(1)}%` },
+              { label: "Ambos anotan",    value: `${(pred.btts_prob * 100).toFixed(1)}%` },
+              { label: "Under 2.5",       value: `${(pred.under25_prob * 100).toFixed(1)}%` },
+              { label: "ELO Local",       value: pred.home_elo_used?.toFixed(0) ?? "—" },
+              { label: "ELO Visitante",   value: pred.away_elo_used?.toFixed(0) ?? "—" },
             ].map(({ label, value }) => (
               <div key={label} className="bg-gray-800 rounded-xl p-3">
                 <p className="text-xs text-gray-400 mb-1">{label}</p>
