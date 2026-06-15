@@ -13,6 +13,14 @@ type Markets = {
 type FormSummary = { games: number; scored: number; conceded: number } | null;
 type ValueBet    = { odd: number; ev: number; value: boolean };
 
+type BackendRecommendation = {
+  market: string;
+  prob: number;
+  ev: number | null;
+  ev_shield_applied: boolean;
+  skipped_by_ev: { market: string; prob: number; ev: number }[];
+};
+
 type MatchData = {
   id: number;
   match_date: string;
@@ -25,6 +33,7 @@ type MatchData = {
   value_bets?: Record<string, ValueBet>;
   odds_available?: boolean;
   bookmakers_count?: number;
+  recommendation?: BackendRecommendation | null;
 };
 
 type Confidence = "muy-alta" | "alta" | "media" | "baja";
@@ -107,16 +116,33 @@ function buildPick(m: MatchData): Pick {
   };
 }
 
+function marketLabel(market: string, m: MatchData): string {
+  const home = teamName(m.home_team.name);
+  const away = teamName(m.away_team.name);
+  const MAP: Record<string, string> = {
+    home:    `Gana ${home}`,
+    draw:    "Empate",
+    away:    `Gana ${away}`,
+    over25:  "Más de 2.5 goles",
+    under25: "Menos de 2.5 goles",
+    btts:    "Ambos anotan",
+  };
+  return MAP[market] ?? market;
+}
+
 function buildCombinadas(matches: MatchData[]): Combinada[] {
   const legs: CombinadaLeg[] = [];
   for (const m of matches) {
-    if (!m.markets) continue;
-    const pick = buildPick(m);
-    if (pick.prob < 0.45) continue;
-    const vb = m.value_bets?.[pick.marketKey];
+    // Usar el campo recommendation del backend: ya tiene el filtro EV aplicado.
+    const rec = m.recommendation;
+    if (!rec || rec.prob < 0.45) continue;
+    const vb = m.value_bets?.[rec.market];
     legs.push({
       matchLabel: `${teamName(m.home_team.name)} vs ${teamName(m.away_team.name)}`,
-      matchId: m.id, bet: pick.bet, prob: pick.prob, marketOdd: vb?.odd ?? null,
+      matchId: m.id,
+      bet: marketLabel(rec.market, m),
+      prob: rec.prob,
+      marketOdd: vb?.odd ?? null,
     });
   }
   legs.sort((a, b) => b.prob - a.prob);
@@ -170,7 +196,7 @@ export default function AnalizarPage() {
   const [loading, setLoading]         = useState(true);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [newVBCount, setNewVBCount]   = useState(0);
-  const [monto, setMonto]             = useState("1000");
+  const [monto, setMonto]             = useState("");
   const [tabComb, setTabComb]         = useState(0);
   const [expandedAdv, setExpandedAdv] = useState<Set<number>>(new Set());
   const [filterConf, setFilterConf]   = useState<Set<Confidence>>(new Set(["muy-alta", "alta"]));
@@ -293,13 +319,16 @@ export default function AnalizarPage() {
         <div className="flex items-center gap-1">
           <span className="text-gray-500 text-sm">$</span>
           <input
-            type="number" min="0" placeholder="1000"
+            type="number" min="0" placeholder="Ingresá tu monto"
             value={monto}
             onChange={e => setMonto(e.target.value)}
-            className="w-28 bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-white text-sm focus:border-blue-500 focus:outline-none"
+            className="w-40 bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-white text-sm placeholder-gray-600 focus:border-blue-500 focus:outline-none"
           />
         </div>
-        <p className="text-xs text-gray-600">Las ganancias se calculan automáticamente en cada tarjeta</p>
+        {montoNum > 0
+          ? <p className="text-xs text-gray-600">Las ganancias se calculan automáticamente en cada tarjeta</p>
+          : <p className="text-xs text-gray-600">Ingresá el monto para ver la ganancia estimada</p>
+        }
       </div>
 
       {/* Combinadas */}
@@ -474,7 +503,7 @@ export default function AnalizarPage() {
                               <p className="text-xs text-gray-500 mb-0.5">Cuota disponible</p>
                               <p className="text-2xl font-black text-white">{pickOdd.toFixed(2)}</p>
                             </div>
-                            {payout && (
+                            {payout ? (
                               <div className="text-right">
                                 <p className="text-xs text-gray-500 mb-0.5">Si apostás ${montoNum.toLocaleString("es-AR")}</p>
                                 <p className="text-lg font-black text-white">${payout.cobras.toLocaleString("es-AR")}</p>
@@ -482,6 +511,10 @@ export default function AnalizarPage() {
                                   +${payout.ganancia.toLocaleString("es-AR")} ganancia
                                 </p>
                               </div>
+                            ) : (
+                              <p className="text-xs text-gray-600 text-right max-w-[110px] leading-relaxed">
+                                Ingresá el monto arriba para ver la ganancia
+                              </p>
                             )}
                           </div>
                         </div>

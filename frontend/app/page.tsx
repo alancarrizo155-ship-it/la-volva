@@ -99,12 +99,22 @@ export default function Home() {
   const todayMatches   = matches.filter((m) => isToday(m.match_date));
   const upcomingToday  = todayMatches.filter((m) => m.status === "scheduled" || m.status === "live");
 
-  // Picks del día: partidos de hoy (o próximos si no hay hoy) con mejor señal
+  // Picks del día — solo confianza Alta (≥70%) o Muy alta (≥80%).
+  // Si no hay ninguno, la sección se oculta por completo.
+  const HIGH_CONF = 0.70;
   const pickCandidates = upcomingToday.length > 0
     ? upcomingToday
     : matches.filter((m) => m.status === "scheduled").slice(0, 5);
   const picks = pickCandidates
-    .filter((m) => m.prediction)
+    .filter((m) => {
+      if (!m.prediction) return false;
+      const recs = getRecommendations(
+        m.prediction,
+        m.home_team?.name ?? "Local",
+        m.away_team?.name ?? "Visitante",
+      );
+      return recs.length > 0 && recs[0].prob >= HIGH_CONF;
+    })
     .sort((a, b) => getPickScore(b.prediction!) - getPickScore(a.prediction!))
     .slice(0, 3);
 
@@ -138,7 +148,7 @@ export default function Home() {
                     <p className="text-xs text-gray-400 mb-2">
                       {m.home_team?.name} vs {m.away_team?.name}
                     </p>
-                    {top ? (
+                    {top && (
                       <>
                         <p className="font-bold text-white text-sm">{top.label}</p>
                         <p className="text-2xl font-black mt-1 text-blue-300">
@@ -146,8 +156,6 @@ export default function Home() {
                         </p>
                         <p className="text-xs text-gray-500 mt-1">{top.reason}</p>
                       </>
-                    ) : (
-                      <p className="text-sm text-gray-500">Partido muy parejo — sin señal clara</p>
                     )}
                   </div>
                 </Link>
